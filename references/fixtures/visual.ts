@@ -5,7 +5,7 @@ import { test as base, expect, type Page } from '@playwright/test';
  *
  * Architecture: two-phase approach
  *   Phase 1 — addInitScript (runs BEFORE any page JS):
- *     - IntersectionObserver mock (lazy images load immediately, fires via setTimeout(0))
+ *     - IntersectionObserver mock (lazy images load immediately)
  *     - window.__PLAYWRIGHT__ flag (for app-level animation disabling)
  *   Phase 2 — waitForPageReady() (call explicitly after page.goto()):
  *     - Wait for custom fonts (document.fonts.ready)
@@ -51,20 +51,24 @@ import { test as base, expect, type Page } from '@playwright/test';
  */
 export async function waitForPageReady(page: Page): Promise<void> {
   // 1. Wait for all custom fonts to finish loading.
-  //    Note: page.evaluate() correctly awaits the Promise returned by document.fonts.ready.
-  //    page.waitForFunction(() => document.fonts.ready) is WRONG — Promise is always truthy.
-  await page.evaluate(() => document.fonts.ready);
+  //    .then(() => {}) discards the FontFaceSet return value — avoids serialization
+  //    of a non-serializable object across the evaluate boundary.
+  //    Note: page.waitForFunction(() => document.fonts.ready) is WRONG — Promise is
+  //    always truthy, so waitForFunction resolves immediately without waiting.
+  await page.evaluate(() => document.fonts.ready.then(() => {}));
 
   // 2. Wait for all images to fully load.
-  //    Uses img.decode() which is race-free: unlike img.onload, it does not
-  //    miss images that completed loading between the check and handler assignment.
+  //    img.decode() is race-free: unlike img.onload assignment, it cannot miss
+  //    an image that completed loading between the check and the handler assignment.
+  //    img.complete is true for both loaded AND broken images; decode() on a broken
+  //    image rejects (caught here), so broken images don't block the wait.
   await page.evaluate(() =>
     Promise.all(
       [...document.images].map((img) =>
         img.complete
           ? Promise.resolve()
           : img.decode().catch(() => {
-              /* ignore decode errors (broken images, CORS) */
+              /* broken images (404, CORS) — don't block */
             })
       )
     )
@@ -73,8 +77,8 @@ export async function waitForPageReady(page: Page): Promise<void> {
   // 3. Freeze GSAP timeline in final state (if GSAP is present on the page).
   //    Must run after page load — GSAP may be loaded via dynamic import.
   //    The guard is best-effort: if GSAP loads after this point, animations stay live.
-  //    For guaranteed freeze, use CSS injection in addInitScript instead:
-  //      page.addInitScript(() => {
+  //    For guaranteed animation freeze, use CSS injection in addInitScript instead:
+  //      await page.addInitScript(() => {
   //        const s = document.createElement('style');
   //        s.textContent = '*, *::before, *::after { animation-duration: 0ms !important; transition-duration: 0ms !important; }';
   //        document.head.appendChild(s);
@@ -82,6 +86,8 @@ export async function waitForPageReady(page: Page): Promise<void> {
   await page.evaluate(() => {
     const g = (window as any).gsap;
     if (g?.globalTimeline) {
+      // Pause ticker first to stop the animation loop, then pause the timeline.
+      if (g.ticker?.sleep) g.ticker.sleep();
       g.globalTimeline.pause();
     }
   });
@@ -98,9 +104,8 @@ export async function waitForPageReady(page: Page): Promise<void> {
 export const test = base.extend({
   page: async ({ page }, use) => {
     // ── Phase 1: addInitScript — runs BEFORE any page JavaScript ──────────────
-    // These scripts run before page.goto() and re-apply on every navigation
-    // (including SPA pushState). Register all init scripts in a single call
-    // to minimize round-trips to the browser process.
+    // Registered in a single call to minimize browser round-trips.
+    // Scripts re-apply automatically on every navigation (including SPA pushState).
     await page.addInitScript(() => {
       // Set window.__PLAYWRIGHT__ flag for app-level animation disabling.
       // Framer Motion, custom animation libs, etc. can check this flag.
@@ -110,9 +115,12 @@ export const test = base.extend({
       // Must be in addInitScript — after page JS runs, components already hold
       // references to the original IntersectionObserver class.
       //
-      // setTimeout(0): fires after framework finishes registering observers.
-      // Direct (synchronous) callback invocation breaks frameworks that check
-      // state in the constructor before observe() is called.
+      // queueMicrotask: fires after the current call stack unwinds but BEFORE
+      // any macrotask (setTimeout). This ensures the callback runs after the
+      // framework finishes registering all observers in the current tick, but
+      // before any next-tick logic that checks intersection state. Using
+      // setTimeout(0) instead would fire too late — after promises and microtasks
+      // have already run, potentially after the app has already checked state.
       window.IntersectionObserver = class MockIntersectionObserver
         implements IntersectionObserver
       {
@@ -120,14 +128,14 @@ export const test = base.extend({
         readonly rootMargin: string = '0px';
         readonly thresholds: ReadonlyArray<number> = [0];
 
-        private _callback: IntersectionObserverCallback;
+        private readonly _callback: IntersectionObserverCallback;
 
         constructor(callback: IntersectionObserverCallback) {
           this._callback = callback;
         }
 
         observe(target: Element): void {
-          setTimeout(() => {
+          queueMicrotask(() => {
             const rect = target.getBoundingClientRect();
             this._callback(
               [
@@ -164,7 +172,7 @@ export const test = base.extend({
               ],
               this as unknown as IntersectionObserver
             );
-          }, 0);
+          });
         }
 
         unobserve(_target: Element): void {}
@@ -175,8 +183,6 @@ export const test = base.extend({
       };
     });
 
-    // ── Phase 2: page is available to tests ───────────────────────────────────
-    // Call waitForPageReady(page) explicitly after page.goto() and locator.waitFor().
     await use(page);
   },
 });

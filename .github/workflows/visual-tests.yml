@@ -17,6 +17,7 @@ jobs:
     container:
       # Use the official Playwright Docker image — same renderer as your baselines.
       # ⚠️ Keep this version in sync with @playwright/test in package.json.
+      #   To check the installed version: node -e "console.log(require('./package-lock.json').packages['node_modules/@playwright/test'].version)"
       image: mcr.microsoft.com/playwright:v1.50.1-noble
       # --ipc=host: required for Chromium in Docker.
       # Without it, renderer processes hit the 64MB /dev/shm limit and crash.
@@ -25,18 +26,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Cache node_modules
+      - name: Get npm cache directory
+        id: npm-cache-dir
+        # npm config get cache returns the absolute path inside the container (/root/.npm).
+        # Do NOT cache node_modules directly — npm ci always removes it before installing.
+        # Do NOT use ~/.npm as a path literal — ~ resolves on the host, not inside the container.
+        run: echo "dir=$(npm config get cache)" >> $GITHUB_OUTPUT
+
+      - name: Cache npm store
         uses: actions/cache@v4
-        id: cache-nm
         with:
-          # Cache node_modules directly — faster than restoring the npm content store.
-          # Avoids the ~/.npm path issue (host path vs /root in container).
-          path: node_modules
-          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
-          restore-keys: ${{ runner.os }}-node-
+          # Cache the npm content-addressable store (tarballs), not node_modules.
+          # restore-keys is safe here: npm ci always rebuilds node_modules from cached tarballs,
+          # so a partial cache hit from restore-keys just saves bandwidth, not correctness.
+          path: ${{ steps.npm-cache-dir.outputs.dir }}
+          key: ${{ runner.os }}-npm-${{ hashFiles('package-lock.json') }}
+          restore-keys: ${{ runner.os }}-npm-
 
       - name: Install dependencies
-        if: steps.cache-nm.outputs.cache-hit != 'true'
+        # Always run npm ci — it's fast when the npm store is cached (~5s vs ~60s cold).
+        # Do NOT skip on cache-hit: npm ci must always run to build node_modules from the store.
         run: npm ci
 
       - name: Run visual regression tests

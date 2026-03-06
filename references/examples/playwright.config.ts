@@ -8,47 +8,57 @@ export default defineConfig({
 
   // Run tests in parallel within each file
   fullyParallel: true,
-  // GitHub Actions ubuntu-latest has 2 vCPUs — 4 workers causes CPU contention
-  // and increases screenshot timing variability. Use 2 in CI for determinism.
+  // GitHub Actions ubuntu-latest = 2 vCPUs. Higher values increase screenshot timing
+  // variability and make diffs non-deterministic. Use 2 in CI, unlimited locally.
   workers: process.env.CI ? 2 : undefined,
 
-  // Retries: 0 locally (fail fast), 2 in CI (absorb single-frame flakiness)
-  retries: process.env.CI ? 2 : 0,
+  // ⚠️ Visual regression tests should NOT retry.
+  // A retry overwrites diff artifacts, making it impossible to diagnose whether the
+  // failure was a flake or a real regression. If you see flakiness, fix it with the
+  // visual fixture (Workflow E) instead of masking it with retries.
+  retries: 0,
 
-  // Stop after 10 failures in CI — don't run all 150 tests if something is globally broken
+  // Stop after 10 failures in CI — don't waste time if something is globally broken.
+  // 0 means "no limit" (unintuitive API — 0 ≠ "stop immediately").
   maxFailures: process.env.CI ? 10 : 0,
 
-  // Locally: 'missing' — create baselines that don't exist yet, never overwrite existing ones.
-  // In CI:   'none'    — NEVER auto-create or overwrite baselines. Missing baseline = test fails.
-  //                      Baselines must be committed to git before CI runs.
-  // Use --update-snapshots (no flag) or the update-snapshots.yml workflow for intentional updates.
+  // CI:    'none' — missing baseline = test fails. Baselines must be committed to git.
+  //        ⚠️ New tests added in a PR will fail in CI until baselines are generated
+  //        via the update-snapshots.yml workflow and committed. This is intentional.
+  // Local: 'missing' — create new baselines automatically, never overwrite existing ones.
+  //        Use `npx playwright test --update-snapshots` to overwrite changed ones.
   updateSnapshots: process.env.CI ? 'none' : 'missing',
 
   // Reporter: CI → dot + HTML report (open:'never' — no browser in CI)
-  //           Local → list (verbose) + HTML report (opens on failure for quick inspection)
+  //           Local → list (verbose) + HTML report (opens on failure)
   reporter: process.env.CI
     ? [['dot'], ['html', { open: 'never', outputFolder: 'playwright-report' }]]
     : [['list'], ['html', { open: 'on-failure', outputFolder: 'playwright-report' }]],
 
   use: {
-    // ⚠️ Set this to your actual dev server URL, or use an env variable:
-    //   baseURL: process.env.BASE_URL || 'http://localhost:3000',
+    // Set your actual dev server URL, or override via env variable:
+    //   BASE_URL=https://staging.example.com npx playwright test
     baseURL: process.env.BASE_URL || 'http://localhost:3000',
 
-    // Emulate prefers-reduced-motion so CSS respects the media query
+    // ⚠️ reducedMotion: 'reduce' sets prefers-reduced-motion CSS media query.
+    // Apps that respond to this query will render a DIFFERENT visual state
+    // (e.g., no fade-in, instant transitions). You are testing the reduced-motion
+    // layout, not the default one. If your app doesn't handle prefers-reduced-motion,
+    // this has no effect. If it does — make sure your baselines match this state.
+    // Remove this line if you want to test the default (animated) visual state.
     reducedMotion: 'reduce',
   },
 
   expect: {
     toHaveScreenshot: {
-      // animations: 'disabled' freezes CSS transitions + Web Animations API at screenshot time
-      // This is already the default — listed here explicitly for visibility
+      // animations: 'disabled' freezes CSS transitions + Web Animations API at
+      // screenshot time via DevTools protocol. This is already the default.
       animations: 'disabled',
       maxDiffPixelRatio: 0.01, // allow up to 1% of pixels to differ
       // threshold: per-pixel color sensitivity (0–1).
-      // 0.2 (Playwright default) is too permissive: allows 20% color shift per pixel.
-      // Use 0.1 for serious regression detection; raise to 0.2 only for font anti-aliasing issues.
-      threshold: 0.1,
+      // 0.05 = a pixel must differ by >5% of full color range to count as changed.
+      // Increase to 0.1 or 0.2 only if font anti-aliasing causes false positives.
+      threshold: 0.05,
     },
   },
 
@@ -63,8 +73,8 @@ export default defineConfig({
     {
       name: 'Tablet',
       use: {
-        // Include a device descriptor for correct user agent and touch emulation.
-        // Override viewport explicitly to the exact dimensions you want to test.
+        // Spread device for correct user agent, touch emulation, deviceScaleFactor.
+        // Override viewport to exact dimensions needed.
         ...devices['iPad (gen 7)'],
         viewport: { width: 768, height: 1024 },
       },
@@ -72,8 +82,8 @@ export default defineConfig({
     {
       name: 'Mobile',
       use: {
-        // Include a device descriptor for correct mobile user agent.
-        // Override viewport explicitly to avoid UA/viewport mismatch.
+        // Spread device for correct mobile user agent and touch emulation.
+        // Override viewport to exact dimensions needed.
         ...devices['iPhone 13'],
         viewport: { width: 375, height: 812 },
       },
