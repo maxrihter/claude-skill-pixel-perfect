@@ -42,6 +42,9 @@ Claude will activate this skill when you say things like:
 - ✅ Dynamic content masking (prices, dates, animations)
 - ✅ Configurable tolerance (pixel ratio, color threshold)
 - ✅ Element-level and full-page screenshots
+- ✅ Production fixture — fonts, CSS/JS animations, lazy images
+- ✅ Cross-platform consistency via Docker (macOS ↔ Linux CI)
+- ✅ GitHub Actions workflows (auto-test on PR + manual snapshot update)
 
 ---
 
@@ -52,8 +55,10 @@ Claude will activate this skill when you say things like:
 npm install -D @playwright/test
 npx playwright install chromium
 
-# 2. Capture baseline
-npx playwright test --update-snapshots
+# 2. Capture baseline (use Docker for cross-platform consistency)
+docker run --rm -v $(pwd):/work -w /work \
+  mcr.microsoft.com/playwright:v1.50.1-noble \
+  npx playwright test --update-snapshots
 
 # 3. Run comparison
 npx playwright test
@@ -68,19 +73,25 @@ npx playwright show-report
 
 ```
 pixel-perfect/
-├── SKILL.md                        # Claude reads this — workflow + quick commands
-├── README.md                       # You are here
+├── SKILL.md                          # Claude reads this — workflow + quick commands
+├── README.md                         # You are here
 ├── LICENSE
+├── .github/
+│   └── workflows/
+│       ├── visual-tests.yml          # Runs on every PR
+│       └── update-snapshots.yml      # Manual trigger — never auto-runs
 └── references/
     ├── setup/
-    │   └── README.md               # Installation, playwright.config.ts, test template
+    │   └── README.md                 # Install, config, Docker, CI setup
     ├── baseline/
-    │   └── README.md               # Capturing and managing baseline screenshots
+    │   └── README.md                 # Capturing and managing baseline screenshots
     ├── comparison/
-    │   └── README.md               # Running tests, reading diffs, fixing false positives
+    │   └── README.md                 # Running tests, reading diffs, fixing false positives
+    ├── fixtures/
+    │   └── visual.ts                 # Production fixture (fonts, animations, lazy images)
     └── examples/
-        ├── playwright.config.ts    # Ready-to-use config
-        └── visual.spec.ts          # Example test file
+        ├── playwright.config.ts      # Ready-to-use config
+        └── visual.spec.ts            # Example test file
 ```
 
 ---
@@ -89,15 +100,20 @@ pixel-perfect/
 
 ```typescript
 import { test, expect } from '@playwright/test';
+// Or with the production fixture (handles fonts, JS animations, lazy images):
+// import { test, expect } from '../fixtures/visual';
 
-test('validators page — desktop', async ({ page }) => {
-  await page.goto('/validators');
-  await page.waitForLoadState('networkidle');
+test('homepage', async ({ page }) => {
+  await page.goto('/');
 
-  await expect(page).toHaveScreenshot('validators.png', {
+  // Wait for visible content — not networkidle (brittle, deprecated)
+  await page.waitForSelector('h1');
+  await page.waitForFunction(() => document.fonts.ready);
+
+  await expect(page).toHaveScreenshot('homepage.png', {
     fullPage: true,
     maxDiffPixelRatio: 0.01,       // 1% tolerance
-    mask: [page.locator('.live-apy')], // mask dynamic content
+    mask: [page.locator('.live-price')], // mask dynamic content
   });
 });
 ```
@@ -122,6 +138,21 @@ test('validators page — desktop', async ({ page }) => {
 | Solid red block | Element moved/changed | Review layout change |
 | Red at bottom | Content height changed | Check new content added |
 | Thin red line | Border/shadow changed | Verify design intent |
+| Entire page differs | macOS vs Linux baseline | Regenerate baseline in Docker |
+
+---
+
+## Cross-Platform Consistency
+
+macOS and Linux render fonts differently. If your CI runs Linux, baselines must be
+generated in a Linux environment to avoid false failures.
+
+```bash
+# Generate baselines inside Docker — matches your Linux CI exactly
+docker run --rm -v $(pwd):/work -w /work \
+  mcr.microsoft.com/playwright:v1.50.1-noble \
+  npx playwright test --update-snapshots
+```
 
 ---
 
@@ -142,6 +173,7 @@ Claude Code will auto-discover the skill on next session start.
 - [Playwright Visual Comparisons Docs](https://playwright.dev/docs/test-snapshots)
 - [pixelmatch](https://github.com/mapbox/pixelmatch) — the diff engine used under the hood
 - [Claude Code Skills Guide](https://docs.anthropic.com/claude-code)
+- [Playwright Docker images](https://playwright.dev/docs/docker)
 
 ---
 

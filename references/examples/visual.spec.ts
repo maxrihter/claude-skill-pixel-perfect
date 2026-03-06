@@ -1,11 +1,17 @@
 import { test, expect } from '@playwright/test';
+// For animations / fonts / lazy images — use the production fixture instead:
+// import { test, expect } from '../fixtures/visual';
 
 // ─────────────────────────────────────────────
 // Basic: full page screenshot
 // ─────────────────────────────────────────────
 test('homepage', async ({ page }) => {
   await page.goto('/');
-  await page.waitForLoadState('networkidle');
+
+  // Wait for visible content — avoid waitForLoadState('networkidle')
+  // networkidle is brittle (WebSockets, long-polling) and slow
+  await page.waitForSelector('h1');
+  await page.waitForFunction(() => document.fonts.ready);
 
   await expect(page).toHaveScreenshot('homepage.png', {
     fullPage: true,
@@ -17,7 +23,7 @@ test('homepage', async ({ page }) => {
 // ─────────────────────────────────────────────
 test('dashboard — mask live data', async ({ page }) => {
   await page.goto('/dashboard');
-  await page.waitForLoadState('networkidle');
+  await page.waitForSelector('[data-testid="dashboard-loaded"]');
 
   await expect(page).toHaveScreenshot('dashboard.png', {
     fullPage: true,
@@ -34,7 +40,7 @@ test('dashboard — mask live data', async ({ page }) => {
 // ─────────────────────────────────────────────
 test('hero section only', async ({ page }) => {
   await page.goto('/');
-  await page.waitForLoadState('networkidle');
+  await page.waitForSelector('.hero');
 
   const hero = page.locator('.hero');
   await expect(hero).toHaveScreenshot('hero.png');
@@ -45,7 +51,7 @@ test('hero section only', async ({ page }) => {
 // ─────────────────────────────────────────────
 test('blog page — relaxed threshold', async ({ page }) => {
   await page.goto('/blog');
-  await page.waitForLoadState('networkidle');
+  await page.waitForSelector('article');
 
   await expect(page).toHaveScreenshot('blog.png', {
     fullPage: true,

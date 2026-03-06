@@ -28,14 +28,16 @@ no third-party services, no extra infrastructure.
 | First setup, no baseline yet | → [Setup](references/setup/README.md) then [Baseline](references/baseline/README.md) |
 | Baseline exists, run comparison | → [Comparison](references/comparison/README.md) |
 | Tests failing with false positives | → [Comparison → Fixes](references/comparison/README.md) |
+| Animations / fonts / lazy images flaky | → [Fixture](references/fixtures/visual.ts) |
 | Need example config / test file | → [Examples](references/examples/) |
+| Setting up CI/CD pipeline | → [GitHub Actions](references/setup/README.md#cicd) |
 
 ## Core Workflow
 
 ```
 1. Install @playwright/test
 2. Write tests with toHaveScreenshot()
-3. Capture baseline  →  npx playwright test --update-snapshots
+3. Capture baseline  →  docker run ... npx playwright test --update-snapshots
 4. Make code changes
 5. Run comparison   →  npx playwright test
 6. Review diffs     →  npx playwright show-report
@@ -44,8 +46,10 @@ no third-party services, no extra infrastructure.
 ## Quick Commands
 
 ```bash
-# First run — create baseline
-npx playwright test --update-snapshots
+# First run — create baseline (use Docker for cross-platform consistency)
+docker run --rm -v $(pwd):/work -w /work \
+  mcr.microsoft.com/playwright:v1.50.1-noble \
+  npx playwright test --update-snapshots
 
 # Compare against baseline
 npx playwright test
@@ -67,7 +71,11 @@ import { test, expect } from '@playwright/test';
 
 test('homepage', async ({ page }) => {
   await page.goto('/');
-  await page.waitForLoadState('networkidle');
+
+  // Wait for key content — not networkidle (brittle, deprecated)
+  await page.waitForSelector('h1');
+  await page.waitForFunction(() => document.fonts.ready);
+
   await expect(page).toHaveScreenshot('homepage.png', {
     fullPage: true,
     maxDiffPixelRatio: 0.01,
@@ -83,6 +91,7 @@ test('homepage', async ({ page }) => {
 | `threshold` | `0.2` | Per-pixel color sensitivity (raise to `0.3` for font issues) |
 | `mask` | `[]` | Locators to ignore (prices, dates, animations) |
 | `fullPage` | `false` | Capture entire scrollable page |
+| `animations` | `'allow'` | Set to `'disabled'` to freeze CSS/Web Animations |
 
 ## Recommended Viewports
 
@@ -94,7 +103,8 @@ test('homepage', async ({ page }) => {
 
 ## Reference Files
 
-- [Setup & Config](references/setup/README.md) — install, `playwright.config.ts`, project structure
-- [Baseline Management](references/baseline/README.md) — capture, update, mask dynamic content
+- [Setup & Config](references/setup/README.md) — install, config, Docker, CI warnings
+- [Baseline Management](references/baseline/README.md) — capture, update, cross-platform
 - [Running Comparisons](references/comparison/README.md) — interpret diffs, fix false positives
+- [Production Fixture](references/fixtures/visual.ts) — fonts, animations, lazy images
 - [Examples](references/examples/) — ready-to-use config + test files

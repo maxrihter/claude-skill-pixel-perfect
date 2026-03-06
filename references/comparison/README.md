@@ -18,8 +18,8 @@ npx playwright test --project=Mobile
 
 ```
 ✓ homepage (Desktop) — passed
-✗ validators-page (Desktop) — 1243 pixels differ (0.86%)
-✓ dashboard (Mobile) — passed
+✗ dashboard (Desktop) — 1243 pixels differ (0.86%)
+✓ homepage (Mobile) — passed
 ```
 
 ## Open HTML Report with Visual Diffs
@@ -35,12 +35,13 @@ Report shows:
 
 ## Interpreting Diffs
 
-| Diff Pattern | Likely Cause |
-|---|---|
-| Red pixels scattered everywhere | Font rendering / anti-aliasing (increase threshold) |
-| Solid red block | Element moved or changed |
-| Red at bottom of page | Content height changed |
-| Thin red line | Border or shadow changed |
+| Diff Pattern | Likely Cause | Fix |
+|---|---|---|
+| Red pixels scattered everywhere | Font rendering / anti-aliasing | Increase `threshold` to `0.3` |
+| Solid red block | Element moved or changed | Review layout change |
+| Red at bottom of page | Content height changed | Check new content added |
+| Thin red line | Border or shadow changed | Verify design intent |
+| Entire page differs | Cross-platform baseline mismatch | Regenerate baseline in Docker |
 
 ## Common Fixes
 
@@ -63,4 +64,22 @@ await expect(page).toHaveScreenshot('page.png', {
 ```typescript
 const section = page.locator('.hero-section');
 await expect(section).toHaveScreenshot('hero.png');
+```
+
+**Still flaky after masking? Use the production fixture:**
+The [fixtures/visual.ts](../fixtures/visual.ts) handles JS animation frameworks
+(Framer Motion, GSAP, Lottie), lazy-loaded images, and font loading at the
+fixture level — no per-test boilerplate required.
+
+```typescript
+// Replace the standard import with the fixture:
+import { test, expect } from '../fixtures/visual';
+```
+
+**Entire page is different (cross-platform):**
+If baselines were captured on macOS but CI runs Linux, regenerate baselines in Docker:
+```bash
+docker run --rm -v $(pwd):/work -w /work \
+  mcr.microsoft.com/playwright:v1.50.1-noble \
+  npx playwright test --update-snapshots
 ```
