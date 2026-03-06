@@ -21,45 +21,30 @@ test('homepage', async ({ page }) => {
 });
 
 // ─────────────────────────────────────────────
-// With dynamic content masked
-// ─────────────────────────────────────────────
-test('dashboard — mask live data', async ({ page }) => {
-  await page.goto('/dashboard');
-  await page.locator('[data-testid="dashboard-loaded"]').waitFor();
-
-  await expect(page).toHaveScreenshot('dashboard.png', {
-    fullPage: true,
-    mask: [
-      page.locator('.live-price'),
-      page.locator('.timestamp'),
-      page.locator('[data-testid="apy-value"]'),
-    ],
-  });
-});
-
-// ─────────────────────────────────────────────
 // Element-level screenshot
 // ─────────────────────────────────────────────
-test('hero section only', async ({ page }) => {
+test('heading', async ({ page }) => {
   await page.goto('/');
-  await page.locator('.hero').waitFor();
+  await page.locator('h1').waitFor();
 
-  await expect(page.locator('.hero')).toHaveScreenshot('hero.png');
+  await expect(page.locator('h1')).toHaveScreenshot('heading.png');
 });
 
 // ─────────────────────────────────────────────
-// Higher tolerance for content-heavy pages
+// With dynamic content masked (adapt selectors to your app)
 // ─────────────────────────────────────────────
-test('blog page — relaxed threshold', async ({ page }) => {
-  await page.goto('/blog');
-  await page.locator('article').waitFor();
-
-  await expect(page).toHaveScreenshot('blog.png', {
-    fullPage: true,
-    maxDiffPixelRatio: 0.03, // 3% — allows for minor font rendering differences
-    threshold: 0.3,
-  });
-});
+// test('page with live data', async ({ page }) => {
+//   await page.goto('/your-route');
+//   await page.locator('[data-testid="loaded"]').waitFor();
+//
+//   await expect(page).toHaveScreenshot('page-live-data.png', {
+//     fullPage: true,
+//     mask: [
+//       page.locator('[data-testid="live-price"]'),
+//       page.locator('[data-testid="timestamp"]'),
+//     ],
+//   });
+// });
 
 // ─────────────────────────────────────────────
 // With fixture: fonts + JS animations + lazy images
@@ -67,7 +52,7 @@ test('blog page — relaxed threshold', async ({ page }) => {
 // import { test, expect, waitForPageReady } from '../fixtures/visual';
 //
 // test('page with animations', async ({ page }) => {
-//   await page.goto('/animated-page');
+//   await page.goto('/');
 //   await page.locator('h1').waitFor();
 //   await waitForPageReady(page);   // freeze fonts, images, GSAP
 //   await expect(page).toHaveScreenshot('animated-page.png', { fullPage: true });

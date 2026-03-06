@@ -8,10 +8,11 @@ import { test as base, expect, type Page } from '@playwright/test';
  *     - IntersectionObserver mock (lazy images load immediately)
  *     - window.__PLAYWRIGHT__ flag (for app-level animation disabling)
  *   Phase 2 — waitForPageReady() (call explicitly after page.goto()):
- *     - Wait for custom fonts (document.fonts.ready)
+ *     - Double rAF — JS framework finishes initial render, layout stabilizes
+ *     - Freeze GSAP timeline (if present) in final state
  *     - Wait for all images to decode
- *     - Freeze GSAP timeline (if present)
- *     - Double rAF — browser settles final paint
+ *     - Wait for custom fonts (document.fonts.ready)
+ *     - Final rAF — browser settles last paint after fonts and images
  *
  * Usage:
  *   import { test, expect, waitForPageReady } from '../fixtures/visual';
@@ -50,14 +51,38 @@ import { test as base, expect, type Page } from '@playwright/test';
  * Works for both full-page navigations and SPA route changes.
  */
 export async function waitForPageReady(page: Page): Promise<void> {
-  // 1. Wait for all custom fonts to finish loading.
-  //    .then(() => {}) discards the FontFaceSet return value — avoids serialization
-  //    of a non-serializable object across the evaluate boundary.
-  //    Note: page.waitForFunction(() => document.fonts.ready) is WRONG — Promise is
-  //    always truthy, so waitForFunction resolves immediately without waiting.
-  await page.evaluate(() => document.fonts.ready.then(() => {}));
+  // 1. Double rAF — let JS framework complete initial render and layout stabilize.
+  //    Must run first: frameworks finish mounting, dynamic imports resolve,
+  //    GSAP starts its animation loop. All subsequent steps depend on a settled DOM.
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+      )
+  );
 
-  // 2. Wait for all images to fully load.
+  // 2. Freeze GSAP timeline in final state (if GSAP is present on the page).
+  //    Must run after initial rAF — GSAP may be loaded via dynamic import.
+  //    lagSmoothing(0): prevents lag-compensation drift when calculating final state.
+  //    progress(1, true): jump to end of timeline; suppressEvents=true skips callbacks.
+  //    pause(): freeze the ticker — no further frame updates.
+  //    The guard is best-effort: if GSAP loads after this point, animations stay live.
+  //    For guaranteed animation freeze, use CSS injection in addInitScript instead:
+  //      await page.addInitScript(() => {
+  //        const s = document.createElement('style');
+  //        s.textContent = '*, *::before, *::after { animation-duration: 0ms !important; transition-duration: 0ms !important; }';
+  //        document.head.appendChild(s);
+  //      })
+  await page.evaluate(() => {
+    const g = (window as any).gsap;
+    if (g?.globalTimeline) {
+      if (g.ticker?.lagSmoothing) g.ticker.lagSmoothing(0);
+      g.globalTimeline.progress(1, true);
+      g.globalTimeline.pause();
+    }
+  });
+
+  // 3. Wait for all images to fully load.
   //    img.decode() is race-free: unlike img.onload assignment, it cannot miss
   //    an image that completed loading between the check and the handler assignment.
   //    img.complete is true for both loaded AND broken images; decode() on a broken
@@ -74,30 +99,18 @@ export async function waitForPageReady(page: Page): Promise<void> {
     )
   );
 
-  // 3. Freeze GSAP timeline in final state (if GSAP is present on the page).
-  //    Must run after page load — GSAP may be loaded via dynamic import.
-  //    The guard is best-effort: if GSAP loads after this point, animations stay live.
-  //    For guaranteed animation freeze, use CSS injection in addInitScript instead:
-  //      await page.addInitScript(() => {
-  //        const s = document.createElement('style');
-  //        s.textContent = '*, *::before, *::after { animation-duration: 0ms !important; transition-duration: 0ms !important; }';
-  //        document.head.appendChild(s);
-  //      })
-  await page.evaluate(() => {
-    const g = (window as any).gsap;
-    if (g?.globalTimeline) {
-      // Pause ticker first to stop the animation loop, then pause the timeline.
-      if (g.ticker?.sleep) g.ticker.sleep();
-      g.globalTimeline.pause();
-    }
-  });
+  // 4. Wait for all custom fonts to finish loading.
+  //    Runs after GSAP and images — dynamic content (including JS-injected fonts)
+  //    is now in the DOM, so all fonts that will ever be used are captured.
+  //    .then(() => {}) discards the FontFaceSet return value — avoids serialization
+  //    of a non-serializable object across the evaluate boundary.
+  //    Note: page.waitForFunction(() => document.fonts.ready) is WRONG — Promise is
+  //    always truthy, so waitForFunction resolves immediately without waiting.
+  await page.evaluate(() => document.fonts.ready.then(() => {}));
 
-  // 4. Double rAF — let the browser settle one final paint frame.
+  // 5. Final rAF — let the browser settle one last paint frame after fonts and images.
   await page.evaluate(
-    () =>
-      new Promise<void>((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
-      )
+    () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
   );
 }
 

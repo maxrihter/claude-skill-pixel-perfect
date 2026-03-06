@@ -26,37 +26,38 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Get npm cache directory
-        id: npm-cache-dir
-        # npm config get cache returns the absolute path inside the container (/root/.npm).
-        # Do NOT cache node_modules directly — npm ci always removes it before installing.
-        # Do NOT use ~/.npm as a path literal — ~ resolves on the host, not inside the container.
-        run: echo "dir=$(npm config get cache)" >> $GITHUB_OUTPUT
-
-      - name: Cache npm store
+      # Cache node_modules (workspace-relative, bind-mounted between host and container).
+      # Do NOT cache the npm store (~/.npm): inside the container it lives at /root/.npm —
+      # the container's own filesystem — NOT the bind-mounted workspace. actions/cache runs
+      # on the host and cannot see /root/.npm inside the container.
+      - name: Cache node_modules
+        id: cache-nm
         uses: actions/cache@v4
         with:
-          # Cache the npm content-addressable store (tarballs), not node_modules.
-          # restore-keys is safe here: npm ci always rebuilds node_modules from cached tarballs,
-          # so a partial cache hit from restore-keys just saves bandwidth, not correctness.
-          path: ${{ steps.npm-cache-dir.outputs.dir }}
-          key: ${{ runner.os }}-npm-${{ hashFiles('package-lock.json') }}
-          restore-keys: ${{ runner.os }}-npm-
+          path: node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
+          restore-keys: ${{ runner.os }}-node-
 
       - name: Install dependencies
-        # Always run npm ci — it's fast when the npm store is cached (~5s vs ~60s cold).
-        # Do NOT skip on cache-hit: npm ci must always run to build node_modules from the store.
+        if: steps.cache-nm.outputs.cache-hit != 'true'
+        # Always run npm ci on cache miss — it's fast when node_modules is cached (~5s vs ~60s cold).
         run: npm ci
 
       - name: Run visual regression tests
         run: npx playwright test
         env:
           CI: true
+          # BASE_URL overrides the fallback in playwright.config.ts.
+          # Set BASE_URL as a repository secret pointing to your staging/preview URL.
+          # If not set, tests run against the baseURL fallback (http://localhost:3000).
+          BASE_URL: ${{ secrets.BASE_URL }}
 
       - name: Upload report on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report-${{ github.run_id }}
-          path: playwright-report/
+          path: |
+            playwright-report/
+            test-results/
           retention-days: 7
