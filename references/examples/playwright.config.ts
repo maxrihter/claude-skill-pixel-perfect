@@ -62,6 +62,15 @@ export default defineConfig({
     },
   },
 
+  // Uncomment to auto-start your dev server before tests.
+  // Without this, start the server manually before running `npx playwright test`.
+  // webServer: {
+  //   command: 'npm run dev',
+  //   url: 'http://localhost:3000',
+  //   reuseExistingServer: !process.env.CI,
+  //   timeout: 30_000,
+  // },
+
   projects: [
     {
       name: 'Desktop',

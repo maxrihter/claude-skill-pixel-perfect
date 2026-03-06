@@ -108,6 +108,7 @@ jobs:
           REASON: ${{ github.event.inputs.reason }}
           BRANCH_NAME: ${{ github.ref_name }}
           ACTOR: ${{ github.actor }}
+          RUN_ID: ${{ github.run_id }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -118,11 +119,12 @@ jobs:
           if git diff --staged --quiet; then
             echo "No snapshot changes to commit."
           else
-            git commit -m "chore: update visual snapshots
-
-          Reason: $REASON
-          Triggered by: @$ACTOR
-          Workflow run: ${{ github.run_id }}"
+            # ⚠️ SECURITY: $REASON is free-form user input. Using it inside a double-quoted
+            # git commit -m "..." would allow command substitution via $() or backticks.
+            # printf '%s' treats the value as a literal string — no shell interpretation.
+            printf 'chore: update visual snapshots\n\nReason: %s\nTriggered by: @%s\nWorkflow run: %s\n' \
+              "$REASON" "$ACTOR" "$RUN_ID" > /tmp/commit-msg
+            git commit -F /tmp/commit-msg
 
             # BRANCH_NAME was validated above (alphanumeric + /_.-) and comes from env:,
             # so it is safe to use here. Quoted to prevent word splitting.

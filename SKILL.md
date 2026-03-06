@@ -20,6 +20,8 @@ allowed-tools: Bash, Read, Write, Glob
 Compare UI screenshots pixel-by-pixel against a baseline. Catch unintended visual changes. Built on `@playwright/test` — no third-party services.
 
 > **Working directory:** All commands run from the project root — the directory containing `package.json`. Do not `cd` between steps.
+>
+> **Package manager:** This skill uses npm. If your project uses yarn or pnpm, adapt install and CI commands accordingly.
 
 ## Step 1: Check State
 
@@ -28,7 +30,7 @@ Run all three commands, then use the table to choose your workflow.
 ```bash
 ls playwright.config.ts 2>/dev/null && echo "CONFIG_EXISTS" || echo "CONFIG_MISSING"
 find snapshots/ -name "*.png" 2>/dev/null | head -1 | grep -q . && echo "BASELINES_EXIST" || echo "BASELINES_MISSING"
-curl -s -o /dev/null -w "%{http_code}" http://localhost:3000 2>/dev/null | grep -q "^2" && echo "SERVER_OK" || echo "NO_SERVER"
+curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://localhost:3000 2>/dev/null | grep -q "^2" && echo "SERVER_OK" || echo "NO_SERVER"
 ```
 
 > If your dev server runs on a port other than 3000, adjust the URL in the curl command above.
@@ -106,6 +108,8 @@ npx playwright test --list
 ```
 If this errors or prints `0 tests`: show the output to the user and stop. Do not proceed to Workflow B.
 
+**Optional:** If the project uses custom fonts, JS animations (GSAP, Framer Motion), or lazy-loaded images, also install the fixture now — see **Workflow E** Steps 1–2.
+
 **Workflow A complete** → continue to **Workflow B**.
 
 ---
@@ -146,18 +150,18 @@ If output is `0` or command errors: STOP. Show the user the test output and ask 
 
 **Step 4.** Commit baselines:
 ```bash
-git rev-parse --is-inside-work-tree 2>/dev/null || { echo "Not a git repository — skipping commit."; exit 0; }
-# Guard: if snapshots/ is gitignored, git add will silently do nothing
-if git check-ignore -q snapshots/ 2>/dev/null; then
+if ! git rev-parse --is-inside-work-tree 2>/dev/null; then
+  echo "Not a git repository — skipping commit."
+elif git check-ignore -q snapshots/ 2>/dev/null; then
   echo "⚠️  snapshots/ is listed in .gitignore — remove it so baselines can be committed."
-  exit 1
-fi
-git add snapshots/
-if git diff --staged --quiet; then
-  echo "Snapshots already committed — nothing to add."
 else
-  git commit -m "chore: add visual baselines"
-  echo "Done. Push to remote: git push"
+  git add snapshots/
+  if git diff --staged --quiet; then
+    echo "Snapshots already committed — nothing to add."
+  else
+    git commit -m "chore: add visual baselines"
+    echo "Done. Push to remote: git push"
+  fi
 fi
 ```
 
@@ -294,7 +298,7 @@ If the user has no staging URL yet (tests run against localhost only), skip this
 
 | Option | Default | Use |
 |--------|---------|-----|
-| `maxDiffPixelRatio` | `0` | % pixels allowed to differ (`0.01` = 1%) |
+| `maxDiffPixelRatio` | `0.01` | % pixels allowed to differ (`0.01` = 1%). Set to `0` for zero tolerance |
 | `threshold` | `0.05` | Per-pixel color sensitivity (0–1). Raise to `0.1` only for font anti-aliasing false positives |
 | `reducedMotion` | `'reduce'` | Sets `prefers-reduced-motion` CSS media query. Remove if you want to test the default (animated) visual state |
 | `mask` | `[]` | Locators to black out (prices, timestamps, live data) |
