@@ -3,79 +3,75 @@ import { test as base, expect, type Page } from '@playwright/test';
 /**
  * Production-ready visual test fixture.
  *
- * Handles all common sources of flakiness:
- *   - CSS transitions & animations
- *   - JS animation frameworks (Framer Motion, GSAP, Lottie)
- *   - Custom web fonts (waits for document.fonts.ready)
- *   - Lazy-loaded images (forces immediate load)
+ * Architecture: two-phase approach
+ *   Phase 1 — addInitScript (runs BEFORE any page JS):
+ *     - IntersectionObserver mock (lazy images load immediately)
+ *     - window.__PLAYWRIGHT__ flag (for app-level animation disabling)
+ *   Phase 2 — waitForPageReady() (call explicitly after page.goto()):
+ *     - Wait for custom fonts (document.fonts.ready)
+ *     - Wait for all images to decode
+ *     - Freeze GSAP timeline (if present)
+ *     - Double rAF — browser settles final paint
  *
  * Usage:
- *   import { test, expect } from '../fixtures/visual';
+ *   import { test, expect, waitForPageReady } from '../fixtures/visual';
  *
  *   test('homepage', async ({ page }) => {
  *     await page.goto('/');
- *     await page.waitForSelector('h1'); // wait for your key element
+ *     await page.locator('h1').waitFor();   // wait for key element
+ *     await waitForPageReady(page);         // stabilize before screenshot
  *     await expect(page).toHaveScreenshot('homepage.png', { fullPage: true });
  *   });
+ *
+ * Framer Motion (skipAnimations):
+ *   The fixture sets window.__PLAYWRIGHT__ = true before page JS runs.
+ *   In your app (e.g., layout.tsx or _app.tsx), add:
+ *
+ *   import { MotionGlobalConfig } from 'framer-motion'; // or 'motion/react'
+ *   if (typeof window !== 'undefined' && (window as any).__PLAYWRIGHT__) {
+ *     MotionGlobalConfig.skipAnimations = true;
+ *   }
+ *
+ *   Or via env variable in playwright.config.ts webServer:
+ *     env: { NEXT_PUBLIC_E2E: 'true' }
+ *   And in your app: if (process.env.NEXT_PUBLIC_E2E === 'true') { ... }
  */
 
-async function stabilizePage(page: Page): Promise<void> {
-  // 1. Kill CSS transitions & animations via injected stylesheet
-  await page.addStyleTag({
-    content: `
-      *, *::before, *::after {
-        animation-duration: 0s !important;
-        animation-delay: 0s !important;
-        transition-duration: 0s !important;
-        transition-delay: 0s !important;
-        scroll-behavior: auto !important;
-      }
-    `,
-  });
+/**
+ * Stabilizes the page before taking a screenshot.
+ * Call explicitly after page.goto() and after waiting for key content.
+ * Works for both full-page navigations and SPA route changes.
+ */
+export async function waitForPageReady(page: Page): Promise<void> {
+  // 1. Wait for all custom fonts to finish loading
+  //    Note: page.evaluate() correctly awaits the Promise returned by document.fonts.ready
+  //    page.waitForFunction(() => document.fonts.ready) is WRONG — Promise is always truthy
+  await page.evaluate(() => document.fonts.ready);
 
-  // 2. Kill JS animation frameworks
+  // 2. Wait for all images to complete loading
+  await page.evaluate(() =>
+    Promise.all(
+      [...document.images].map((img) =>
+        img.complete
+          ? Promise.resolve()
+          : new Promise<void>((resolve) => {
+              img.onload = img.onerror = () => resolve();
+            })
+      )
+    )
+  );
+
+  // 3. Freeze GSAP timeline in final state (if GSAP is present on the page)
+  //    pause() stops animations in current state
+  //    globalTimeline must be paused AFTER page has loaded and GSAP is initialized
   await page.evaluate(() => {
-    // Framer Motion
-    try {
-      // @ts-ignore
-      window.MotionGlobalConfig = { skipAnimations: true };
-    } catch {}
-
-    // GSAP — fast-forward timeline
-    try {
-      // @ts-ignore
-      if (window.gsap) window.gsap.globalTimeline.timeScale(1000);
-    } catch {}
+    const g = (window as any).gsap;
+    if (g?.globalTimeline) {
+      g.globalTimeline.pause();
+    }
   });
 
-  // 3. Force lazy images to load immediately
-  await page.evaluate(() => {
-    // Remove lazy loading attribute
-    document.querySelectorAll('img[loading="lazy"]').forEach((img) => {
-      (img as HTMLImageElement).loading = 'eager';
-    });
-
-    // Override IntersectionObserver so scroll-based loaders fire immediately
-    const OriginalIO = window.IntersectionObserver;
-    window.IntersectionObserver = class extends OriginalIO {
-      constructor(
-        cb: IntersectionObserverCallback,
-        opts?: IntersectionObserverInit
-      ) {
-        super(cb, opts);
-        // Fire with isIntersecting: true after a short tick
-        setTimeout(
-          () => cb([{ isIntersecting: true, intersectionRatio: 1 } as any], this),
-          0
-        );
-      }
-    };
-  });
-
-  // 4. Wait for all custom fonts to finish loading
-  await page.waitForFunction(() => document.fonts.ready);
-
-  // 5. Double rAF — let the browser settle one final paint frame
+  // 4. Double rAF — let the browser settle one final paint frame
   await page.evaluate(
     () =>
       new Promise<void>((resolve) =>
@@ -86,8 +82,63 @@ async function stabilizePage(page: Page): Promise<void> {
 
 export const test = base.extend({
   page: async ({ page }, use) => {
-    // Stabilize after every navigation
-    page.on('load', () => stabilizePage(page));
+    // ── Phase 1: addInitScript — runs BEFORE any page JavaScript ──────────────
+    // These must be registered before page.goto() is called.
+    // They automatically re-apply on every navigation (including SPA pushState).
+
+    // Mock IntersectionObserver so lazy loaders fire immediately
+    // Must be in addInitScript — after page JS runs, components already have
+    // references to the original IntersectionObserver class.
+    await page.addInitScript(() => {
+      // Full IntersectionObserverEntry mock (all required fields per W3C spec)
+      window.IntersectionObserver = class MockIntersectionObserver
+        implements IntersectionObserver
+      {
+        readonly root: Element | Document | null = null;
+        readonly rootMargin: string = '0px';
+        readonly thresholds: ReadonlyArray<number> = [0];
+
+        private _callback: IntersectionObserverCallback;
+
+        constructor(callback: IntersectionObserverCallback) {
+          this._callback = callback;
+        }
+
+        observe(target: Element): void {
+          const rect = target.getBoundingClientRect();
+          this._callback(
+            [
+              {
+                isIntersecting: true,
+                intersectionRatio: 1,
+                target,
+                boundingClientRect: rect,
+                intersectionRect: rect,
+                rootBounds: null,
+                time: performance.now(),
+              } as IntersectionObserverEntry,
+            ],
+            this as unknown as IntersectionObserver
+          );
+        }
+
+        unobserve(_target: Element): void {}
+        disconnect(): void {}
+        takeRecords(): IntersectionObserverEntry[] {
+          return [];
+        }
+      };
+    });
+
+    // Set window.__PLAYWRIGHT__ flag for app-level animation disabling.
+    // In your app, check this flag to disable Framer Motion / other frameworks.
+    // See usage comment at top of this file.
+    await page.addInitScript(() => {
+      (window as any).__PLAYWRIGHT__ = true;
+    });
+
+    // ── Phase 2: page is available to tests ───────────────────────────────────
+    // Tests call waitForPageReady(page) explicitly after goto() and content wait.
     await use(page);
   },
 });

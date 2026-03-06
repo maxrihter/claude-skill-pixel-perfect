@@ -3,40 +3,82 @@
 ## Install
 
 ```bash
-npm init -y  # if no package.json
+npm init -y  # if no package.json yet
 npm install -D @playwright/test
 npx playwright install chromium
 ```
 
-## Config: `playwright.config.ts`
+## Minimal `package.json`
+
+```json
+{
+  "name": "visual-tests",
+  "scripts": {
+    "test:visual": "playwright test",
+    "test:visual:update": "playwright test --update-snapshots",
+    "test:visual:report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.50.0"
+  }
+}
+```
+
+## `tsconfig.json`
+
+Required for correct TypeScript type resolution:
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "strict": true,
+    "types": ["@playwright/test"]
+  }
+}
+```
+
+## `playwright.config.ts`
 
 → Full example: [examples/playwright.config.ts](../examples/playwright.config.ts)
 
-Key options:
+Key options explained:
 
 ```typescript
-import { defineConfig, devices } from '@playwright/test';
+import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
   testDir: './tests',
   snapshotDir: './snapshots',
-  snapshotPathTemplate: '{snapshotDir}/{projectName}/{testFilePath}/{arg}{ext}',
+
+  // 'missing' — only create snapshots for new tests, never overwrite existing ones.
+  // Use --update-snapshots (without flag) to intentionally update changed baselines.
+  // Requires @playwright/test >= 1.50
+  updateSnapshots: 'missing',
+
+  // CI: retry twice to absorb single-frame rendering glitches
+  retries: process.env.CI ? 2 : 0,
+
+  // CI: stop after 10 failures — don't run 150 tests if something is globally broken
+  maxFailures: process.env.CI ? 10 : 0,
 
   use: {
     baseURL: 'https://your-site.com',
-    reducedMotion: 'reduce',   // disable CSS animations via media query
+    reducedMotion: 'reduce',        // emulate prefers-reduced-motion for CSS
   },
 
   expect: {
     toHaveScreenshot: {
-      animations: 'disabled',  // freeze CSS transitions & Web Animations API
+      animations: 'disabled',       // freeze CSS transitions + Web Animations API
       maxDiffPixelRatio: 0.01,
       threshold: 0.2,
     },
   },
 
-  // Locally: missing baselines → tests pass (won't block dev workflow)
-  // In CI:   missing baselines → tests fail (baselines must be committed)
+  // Locally: missing baselines → tests pass (won't block local dev)
+  // In CI:   missing baselines → tests fail (baselines must be committed to git)
   ignoreSnapshots: !process.env.CI,
 });
 ```
@@ -46,15 +88,16 @@ export default defineConfig({
 ```typescript
 import { test, expect } from '@playwright/test';
 // For JS animations / font loading / lazy images — use the production fixture:
-// import { test, expect } from '../fixtures/visual';
+// import { test, expect, waitForPageReady } from '../fixtures/visual';
 
 test('homepage', async ({ page }) => {
   await page.goto('/');
 
-  // ✅ Wait for visible content (specific selector)
-  await page.waitForSelector('h1');
-  // ✅ Wait for web fonts to finish loading
-  await page.waitForFunction(() => document.fonts.ready);
+  // locator.waitFor() — modern API, prefer over page.waitForSelector()
+  await page.locator('h1').waitFor();
+
+  // If using fixture:
+  // await waitForPageReady(page);  // fonts + images + GSAP freeze
 
   await expect(page).toHaveScreenshot('homepage.png', {
     fullPage: true,
@@ -64,51 +107,58 @@ test('homepage', async ({ page }) => {
 ```
 
 > **Why not `waitForLoadState('networkidle')`?**
-> It waits for 500ms of zero network activity — broken by WebSockets, long-polling, and background analytics. It's slow, brittle, and [discouraged by Playwright maintainers](https://playwright.dev/docs/best-practices). Use element-based waits (`waitForSelector`) and `document.fonts.ready` instead.
+> It waits for 500ms of zero network activity — broken by WebSockets, long-polling,
+> analytics beacons. It's brittle, slow, and [discouraged by Playwright maintainers](https://playwright.dev/docs/best-practices).
+> Use `locator.waitFor()` instead — wait for the specific element you care about.
 
-## Threshold Options
+## SPA Navigation (React Router, Next.js, Nuxt, SvelteKit)
 
-| Option | Description | Default |
-|--------|-------------|---------|
-| `maxDiffPixelRatio` | % of pixels allowed to differ (0–1) | `0` |
-| `maxDiffPixels` | absolute pixel count allowed | — |
-| `threshold` | per-pixel color sensitivity (0–1) | `0.2` |
+Client-side route changes don't trigger `page.load` — there's no new document.
+Use `page.waitForURL()` + `locator.waitFor()` for SPA navigation:
 
-Use `maxDiffPixelRatio: 0.01` for real-world sites (fonts, anti-aliasing).
+```typescript
+// After clicking a link in an SPA
+await page.click('a[href="/dashboard"]');
+await page.waitForURL('**/dashboard');
+await page.locator('[data-testid="dashboard-content"]').waitFor();
+```
 
 ## Cross-Platform Consistency (macOS vs Linux CI)
 
-**Problem:** Screenshots taken on macOS render fonts differently than Linux CI.
-Baselines captured locally will fail in CI — different font hinting, subpixel rendering.
+**Problem:** macOS and Linux render fonts differently (font hinting, subpixel antialiasing).
+Baselines captured on macOS will fail in Linux CI — false positives on every run.
 
 **Solution:** Generate baselines inside Docker, matching the Linux CI environment:
 
 ```bash
-# Run once to generate/update baselines — uses same Linux renderer as CI
+# Run once — generates baselines in Linux (same as CI)
 docker run --rm \
   -v $(pwd):/work -w /work \
   mcr.microsoft.com/playwright:v1.50.1-noble \
   npx playwright test --update-snapshots
 ```
 
-Commit the resulting `snapshots/` to git. All team members use the same Linux baselines.
+Commit the `snapshots/` directory to git. All team members use the same baselines.
 
 > **Match the Docker image version to your `@playwright/test` version.**
 > Check available tags: https://mcr.microsoft.com/v2/playwright/tags/list
-
-> **⚠️ Never run `--update-snapshots` in CI automatically.**
+>
+> ⚠️ **Never run `--update-snapshots` in CI automatically.**
 > Baselines are the source of truth. Silent auto-updates hide regressions.
-> Use the [update-snapshots workflow](../../.github/workflows/update-snapshots.yml) for intentional updates.
+> Use the [update-snapshots workflow](../../.github/workflows/update-snapshots.yml)
+> for intentional updates.
 
 ## Project Structure
 
 ```
 my-project/
+├── package.json
+├── tsconfig.json
 ├── playwright.config.ts
 ├── tests/
 │   └── visual.spec.ts
 ├── fixtures/
-│   └── visual.ts              # production fixture (fonts, animations, lazy images)
+│   └── visual.ts              # production fixture (copy from skill)
 ├── snapshots/                 # committed to git — the baseline
 │   ├── Desktop/
 │   └── Mobile/
@@ -116,4 +166,15 @@ my-project/
     └── workflows/
         ├── visual-tests.yml       # runs on every PR
         └── update-snapshots.yml   # manual trigger only
+```
+
+## `.gitignore`
+
+```gitignore
+# Generated by Playwright — never commit
+test-results/
+playwright-report/
+
+# The baseline — always commit
+# snapshots/  ← do NOT add this
 ```

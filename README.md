@@ -5,7 +5,6 @@
 ![Claude Skill](https://img.shields.io/badge/Claude-Skill-6B48FF?logo=anthropic&logoColor=white)
 ![Playwright](https://img.shields.io/badge/Playwright-45ba4b?logo=playwright&logoColor=white)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
-![Tier 2](https://img.shields.io/badge/Architecture-Tier%202-blue)
 
 ---
 
@@ -13,7 +12,7 @@
 
 Enables Claude to set up, run, and interpret **pixel-perfect visual regression tests** — comparing UI screenshots against a baseline to catch unintended visual changes.
 
-Built on top of `@playwright/test`'s native `toHaveScreenshot()` — no extra dependencies, no third-party services.
+Built on `@playwright/test`'s native `toHaveScreenshot()` — no extra dependencies, no third-party services.
 
 ```
 Baseline capture → Code change → Re-run → HTML diff report
@@ -24,13 +23,13 @@ Baseline capture → Code change → Re-run → HTML diff report
 
 ## Triggers
 
-Claude will activate this skill when you say things like:
+Claude activates this skill when you say things like:
 
 - _"Run pixel-perfect tests on this page"_
 - _"Check for visual regressions"_
+- _"Tests failing with snapshot mismatch"_
 - _"Compare screenshots before and after"_
 - _"Set up visual testing with Playwright"_
-- _"Generate a UI diff report"_
 
 ---
 
@@ -40,11 +39,11 @@ Claude will activate this skill when you say things like:
 - ✅ Multi-viewport testing (Desktop / Tablet / Mobile)
 - ✅ HTML report with side-by-side diffs
 - ✅ Dynamic content masking (prices, dates, animations)
-- ✅ Configurable tolerance (pixel ratio, color threshold)
-- ✅ Element-level and full-page screenshots
-- ✅ Production fixture — fonts, CSS/JS animations, lazy images
+- ✅ Configurable tolerance (`maxDiffPixelRatio`, `threshold`)
+- ✅ Production fixture — handles fonts, CSS/JS animations, lazy images
 - ✅ Cross-platform consistency via Docker (macOS ↔ Linux CI)
-- ✅ GitHub Actions workflows (auto-test on PR + manual snapshot update)
+- ✅ GitHub Actions workflows (PR checks + manual snapshot update)
+- ✅ `retries`, `maxFailures`, `updateSnapshots: 'missing'` configured
 
 ---
 
@@ -55,7 +54,7 @@ Claude will activate this skill when you say things like:
 npm install -D @playwright/test
 npx playwright install chromium
 
-# 2. Capture baseline (use Docker for cross-platform consistency)
+# 2. Capture baseline (in Docker — consistent with Linux CI)
 docker run --rm -v $(pwd):/work -w /work \
   mcr.microsoft.com/playwright:v1.50.1-noble \
   npx playwright test --update-snapshots
@@ -73,25 +72,25 @@ npx playwright show-report
 
 ```
 pixel-perfect/
-├── SKILL.md                          # Claude reads this — workflow + quick commands
-├── README.md                         # You are here
+├── SKILL.md                             # Claude reads this — decision tree + workflows
+├── README.md                            # You are here
 ├── LICENSE
 ├── .github/
 │   └── workflows/
-│       ├── visual-tests.yml          # Runs on every PR
-│       └── update-snapshots.yml      # Manual trigger — never auto-runs
+│       ├── visual-tests.yml             # Runs on every PR (with permissions + cache)
+│       └── update-snapshots.yml         # Manual trigger — requires reason, commits with attribution
 └── references/
     ├── setup/
-    │   └── README.md                 # Install, config, Docker, CI setup
+    │   └── README.md                    # Install, package.json, tsconfig, config, SPA guide
     ├── baseline/
-    │   └── README.md                 # Capturing and managing baseline screenshots
+    │   └── README.md                    # Capture, Docker, cross-platform, masking
     ├── comparison/
-    │   └── README.md                 # Running tests, reading diffs, fixing false positives
+    │   └── README.md                    # Running tests, reading diffs, fixing false positives
     ├── fixtures/
-    │   └── visual.ts                 # Production fixture (fonts, animations, lazy images)
+    │   └── visual.ts                    # Production fixture: addInitScript + waitForPageReady
     └── examples/
-        ├── playwright.config.ts      # Ready-to-use config
-        └── visual.spec.ts            # Example test file
+        ├── playwright.config.ts         # Ready-to-use config (retries, updateSnapshots, viewports)
+        └── visual.spec.ts               # Example tests with locator.waitFor() + fixture usage
 ```
 
 ---
@@ -99,20 +98,18 @@ pixel-perfect/
 ## Example Test
 
 ```typescript
-import { test, expect } from '@playwright/test';
-// Or with the production fixture (handles fonts, JS animations, lazy images):
-// import { test, expect } from '../fixtures/visual';
+import { test, expect, waitForPageReady } from '../fixtures/visual';
 
 test('homepage', async ({ page }) => {
   await page.goto('/');
+  await page.locator('h1').waitFor();
 
-  // Wait for visible content — not networkidle (brittle, deprecated)
-  await page.waitForSelector('h1');
-  await page.waitForFunction(() => document.fonts.ready);
+  // Stabilize: fonts + images + GSAP freeze (via addInitScript + evaluate)
+  await waitForPageReady(page);
 
   await expect(page).toHaveScreenshot('homepage.png', {
     fullPage: true,
-    maxDiffPixelRatio: 0.01,       // 1% tolerance
+    maxDiffPixelRatio: 0.01,
     mask: [page.locator('.live-price')], // mask dynamic content
   });
 });
@@ -144,11 +141,9 @@ test('homepage', async ({ page }) => {
 
 ## Cross-Platform Consistency
 
-macOS and Linux render fonts differently. If your CI runs Linux, baselines must be
-generated in a Linux environment to avoid false failures.
+macOS and Linux render fonts differently. Generate baselines in Docker to match CI:
 
 ```bash
-# Generate baselines inside Docker — matches your Linux CI exactly
 docker run --rm -v $(pwd):/work -w /work \
   mcr.microsoft.com/playwright:v1.50.1-noble \
   npx playwright test --update-snapshots
@@ -159,21 +154,19 @@ docker run --rm -v $(pwd):/work -w /work \
 ## Installation into Claude Code
 
 ```bash
-# Clone into your Claude skills directory
 git clone https://github.com/maxrihter/claude-skill-pixel-perfect \
   ~/.claude/skills/pixel-perfect
 ```
 
-Claude Code will auto-discover the skill on next session start.
+Claude Code auto-discovers the skill on next session start.
 
 ---
 
 ## References
 
 - [Playwright Visual Comparisons Docs](https://playwright.dev/docs/test-snapshots)
-- [pixelmatch](https://github.com/mapbox/pixelmatch) — the diff engine used under the hood
-- [Claude Code Skills Guide](https://docs.anthropic.com/claude-code)
 - [Playwright Docker images](https://playwright.dev/docs/docker)
+- [pixelmatch](https://github.com/mapbox/pixelmatch) — the diff engine under the hood
 
 ---
 

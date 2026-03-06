@@ -6,17 +6,28 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   visual-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+
     container:
-      # Use the official Playwright Docker image — same renderer as your baselines
-      # Update this version to match your @playwright/test version
+      # Use the official Playwright Docker image — same renderer as your baselines.
+      # ⚠️ Keep this version in sync with @playwright/test in package.json.
       image: mcr.microsoft.com/playwright:v1.50.1-noble
-      options: --user 1001
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: ${{ runner.os }}-npm-
 
       - name: Install dependencies
         run: npm ci

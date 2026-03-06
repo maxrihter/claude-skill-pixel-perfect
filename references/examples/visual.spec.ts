@@ -1,6 +1,8 @@
+// Basic tests — standard @playwright/test
 import { test, expect } from '@playwright/test';
-// For animations / fonts / lazy images — use the production fixture instead:
-// import { test, expect } from '../fixtures/visual';
+
+// With the production fixture (fonts, JS animations, lazy images):
+// import { test, expect, waitForPageReady } from '../fixtures/visual';
 
 // ─────────────────────────────────────────────
 // Basic: full page screenshot
@@ -8,10 +10,10 @@ import { test, expect } from '@playwright/test';
 test('homepage', async ({ page }) => {
   await page.goto('/');
 
-  // Wait for visible content — avoid waitForLoadState('networkidle')
-  // networkidle is brittle (WebSockets, long-polling) and slow
-  await page.waitForSelector('h1');
-  await page.waitForFunction(() => document.fonts.ready);
+  // locator.waitFor() is the modern API — prefer over page.waitForSelector()
+  await page.locator('h1').waitFor();
+
+  // If using fixture: await waitForPageReady(page);
 
   await expect(page).toHaveScreenshot('homepage.png', {
     fullPage: true,
@@ -23,7 +25,7 @@ test('homepage', async ({ page }) => {
 // ─────────────────────────────────────────────
 test('dashboard — mask live data', async ({ page }) => {
   await page.goto('/dashboard');
-  await page.waitForSelector('[data-testid="dashboard-loaded"]');
+  await page.locator('[data-testid="dashboard-loaded"]').waitFor();
 
   await expect(page).toHaveScreenshot('dashboard.png', {
     fullPage: true,
@@ -40,10 +42,9 @@ test('dashboard — mask live data', async ({ page }) => {
 // ─────────────────────────────────────────────
 test('hero section only', async ({ page }) => {
   await page.goto('/');
-  await page.waitForSelector('.hero');
+  await page.locator('.hero').waitFor();
 
-  const hero = page.locator('.hero');
-  await expect(hero).toHaveScreenshot('hero.png');
+  await expect(page.locator('.hero')).toHaveScreenshot('hero.png');
 });
 
 // ─────────────────────────────────────────────
@@ -51,7 +52,7 @@ test('hero section only', async ({ page }) => {
 // ─────────────────────────────────────────────
 test('blog page — relaxed threshold', async ({ page }) => {
   await page.goto('/blog');
-  await page.waitForSelector('article');
+  await page.locator('article').waitFor();
 
   await expect(page).toHaveScreenshot('blog.png', {
     fullPage: true,
@@ -59,3 +60,15 @@ test('blog page — relaxed threshold', async ({ page }) => {
     threshold: 0.3,
   });
 });
+
+// ─────────────────────────────────────────────
+// With fixture: fonts + JS animations + lazy images
+// ─────────────────────────────────────────────
+// import { test, expect, waitForPageReady } from '../fixtures/visual';
+//
+// test('page with animations', async ({ page }) => {
+//   await page.goto('/animated-page');
+//   await page.locator('h1').waitFor();
+//   await waitForPageReady(page);   // freeze fonts, images, GSAP
+//   await expect(page).toHaveScreenshot('animated-page.png', { fullPage: true });
+// });
