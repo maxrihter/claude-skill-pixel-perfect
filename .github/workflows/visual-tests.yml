@@ -18,18 +18,25 @@ jobs:
       # Use the official Playwright Docker image — same renderer as your baselines.
       # ⚠️ Keep this version in sync with @playwright/test in package.json.
       image: mcr.microsoft.com/playwright:v1.50.1-noble
+      # --ipc=host: required for Chromium in Docker.
+      # Without it, renderer processes hit the 64MB /dev/shm limit and crash.
+      options: --ipc=host
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Cache node_modules
         uses: actions/cache@v4
+        id: cache-nm
         with:
-          path: ~/.npm
-          key: ${{ runner.os }}-npm-${{ hashFiles('**/package-lock.json') }}
-          restore-keys: ${{ runner.os }}-npm-
+          # Cache node_modules directly — faster than restoring the npm content store.
+          # Avoids the ~/.npm path issue (host path vs /root in container).
+          path: node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
+          restore-keys: ${{ runner.os }}-node-
 
       - name: Install dependencies
+        if: steps.cache-nm.outputs.cache-hit != 'true'
         run: npm ci
 
       - name: Run visual regression tests

@@ -6,6 +6,11 @@ export default defineConfig({
   // {testFileDir}/{testFileName} keeps the path readable without .ts-as-directory quirk
   snapshotPathTemplate: '{snapshotDir}/{projectName}/{testFileDir}/{testFileName}/{arg}{ext}',
 
+  // Run tests in parallel within each file
+  fullyParallel: true,
+  // Limit workers in CI to avoid resource contention; locally use all CPUs
+  workers: process.env.CI ? 4 : undefined,
+
   // Retries: 0 locally (fail fast), 2 in CI (absorb single-frame flakiness)
   retries: process.env.CI ? 2 : 0,
 
@@ -17,10 +22,22 @@ export default defineConfig({
   // Requires @playwright/test >= 1.50
   updateSnapshots: 'missing',
 
+  // Reporter: CI → dot + HTML report (never auto-opens browser)
+  //           Local → list (verbose) + HTML report (opens on failure)
+  reporter: process.env.CI
+    ? [['dot'], ['html', { open: 'never', outputFolder: 'playwright-report' }]]
+    : [['list'], ['html', { open: 'on-failure', outputFolder: 'playwright-report' }]],
+
   use: {
     baseURL: 'https://your-site.com',
     // Emulate prefers-reduced-motion so CSS respects the media query
     reducedMotion: 'reduce',
+    // --disable-dev-shm-usage: fallback for Docker environments without --ipc=host.
+    // Prevents Chromium from crashing due to /dev/shm size limits (default 64MB in Docker).
+    // If using GitHub Actions with `container: options: --ipc=host`, remove this flag.
+    launchOptions: {
+      args: ['--disable-dev-shm-usage'],
+    },
   },
 
   expect: {

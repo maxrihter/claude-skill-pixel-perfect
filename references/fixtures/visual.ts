@@ -5,7 +5,8 @@ import { test as base, expect, type Page } from '@playwright/test';
  *
  * Architecture: two-phase approach
  *   Phase 1 — addInitScript (runs BEFORE any page JS):
- *     - IntersectionObserver mock (lazy images load immediately)
+ *     - Override getBoundingClientRect globally (returns realistic values before layout)
+ *     - IntersectionObserver mock (lazy images load immediately, fires via setTimeout(0))
  *     - window.__PLAYWRIGHT__ flag (for app-level animation disabling)
  *   Phase 2 — waitForPageReady() (call explicitly after page.goto()):
  *     - Wait for custom fonts (document.fonts.ready)
@@ -86,11 +87,40 @@ export const test = base.extend({
     // These must be registered before page.goto() is called.
     // They automatically re-apply on every navigation (including SPA pushState).
 
-    // Mock IntersectionObserver so lazy loaders fire immediately
+    // Mock IntersectionObserver so lazy loaders fire immediately.
     // Must be in addInitScript — after page JS runs, components already have
     // references to the original IntersectionObserver class.
     await page.addInitScript(() => {
-      // Full IntersectionObserverEntry mock (all required fields per W3C spec)
+      // Override getBoundingClientRect globally.
+      // addInitScript runs before layout, so getBoundingClientRect() returns {width:0, height:0}
+      // on all elements. Lazy loaders that check element dimensions would see empty rects
+      // and refuse to load. This override returns a realistic stand-in before first layout.
+      // After layout completes, the real implementation is called and returns actual values.
+      const _origGBCR = Element.prototype.getBoundingClientRect;
+      Element.prototype.getBoundingClientRect = function () {
+        const rect = _origGBCR.call(this);
+        if (rect.width === 0 && rect.height === 0) {
+          return {
+            x: 0,
+            y: 0,
+            top: 0,
+            left: 0,
+            bottom: 200,
+            right: 400,
+            width: 400,
+            height: 200,
+            toJSON() {
+              return this;
+            },
+          } as DOMRect;
+        }
+        return rect;
+      };
+
+      // Full IntersectionObserverEntry mock (all required fields per W3C spec).
+      // setTimeout(0): fires after framework finishes registering observers.
+      // Direct (synchronous) callback invocation breaks frameworks that check
+      // state in the constructor before observe() is called.
       window.IntersectionObserver = class MockIntersectionObserver
         implements IntersectionObserver
       {
@@ -105,21 +135,38 @@ export const test = base.extend({
         }
 
         observe(target: Element): void {
-          const rect = target.getBoundingClientRect();
-          this._callback(
-            [
-              {
-                isIntersecting: true,
-                intersectionRatio: 1,
-                target,
-                boundingClientRect: rect,
-                intersectionRect: rect,
-                rootBounds: null,
-                time: performance.now(),
-              } as IntersectionObserverEntry,
-            ],
-            this as unknown as IntersectionObserver
-          );
+          // setTimeout(0): defer until after framework registers all observers.
+          setTimeout(() => {
+            const rect = target.getBoundingClientRect(); // uses override above — realistic values
+            this._callback(
+              [
+                {
+                  isIntersecting: true,
+                  intersectionRatio: 1,
+                  target,
+                  boundingClientRect: rect,
+                  intersectionRect: rect,
+                  // Use viewport dimensions (not null) to satisfy loaders that check
+                  // whether the element is within the viewport bounds.
+                  rootBounds: {
+                    x: 0,
+                    y: 0,
+                    top: 0,
+                    left: 0,
+                    width: window.innerWidth,
+                    height: window.innerHeight,
+                    bottom: window.innerHeight,
+                    right: window.innerWidth,
+                    toJSON() {
+                      return this;
+                    },
+                  } as DOMRectReadOnly,
+                  time: performance.now(),
+                } as IntersectionObserverEntry,
+              ],
+              this as unknown as IntersectionObserver
+            );
+          }, 0);
         }
 
         unobserve(_target: Element): void {}

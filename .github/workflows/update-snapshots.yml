@@ -21,21 +21,28 @@ jobs:
     container:
       # Must match the image used in visual-tests.yml to produce identical baselines
       image: mcr.microsoft.com/playwright:v1.50.1-noble
+      # --ipc=host: required for Chromium in Docker.
+      # Without it, renderer processes hit the 64MB /dev/shm limit and crash.
+      options: --ipc=host
 
     steps:
       - uses: actions/checkout@v4
         with:
-          # Use GITHUB_TOKEN with write access — required for git push inside container
+          # Fetch full history so git push works correctly inside container
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cache node_modules
         uses: actions/cache@v4
+        id: cache-nm
         with:
-          path: ~/.npm
-          key: ${{ runner.os }}-npm-${{ hashFiles('**/package-lock.json') }}
-          restore-keys: ${{ runner.os }}-npm-
+          # Cache node_modules directly — faster than restoring the npm content store.
+          # Avoids the ~/.npm path issue (host path vs /root in container).
+          path: node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
+          restore-keys: ${{ runner.os }}-node-
 
       - name: Install dependencies
+        if: steps.cache-nm.outputs.cache-hit != 'true'
         run: npm ci
 
       - name: Update snapshots
@@ -44,13 +51,16 @@ jobs:
           CI: true
 
       - name: Commit updated snapshots
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          # Configure remote with token for authenticated push inside Docker container
-          git remote set-url origin \
-            https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}
+          # Use credential helper to authenticate git push inside Docker container.
+          # This avoids exposing the token in `git remote -v` or .git/config.
+          git config --global credential.helper \
+            '!f() { echo "username=x-access-token"; echo "password=$GITHUB_TOKEN"; }; f'
 
           git add snapshots/
 
