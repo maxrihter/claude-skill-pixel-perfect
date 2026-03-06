@@ -5,7 +5,6 @@ import { test as base, expect, type Page } from '@playwright/test';
  *
  * Architecture: two-phase approach
  *   Phase 1 — addInitScript (runs BEFORE any page JS):
- *     - Override getBoundingClientRect globally (returns realistic values before layout)
  *     - IntersectionObserver mock (lazy images load immediately, fires via setTimeout(0))
  *     - window.__PLAYWRIGHT__ flag (for app-level animation disabling)
  *   Phase 2 — waitForPageReady() (call explicitly after page.goto()):
@@ -33,9 +32,16 @@ import { test as base, expect, type Page } from '@playwright/test';
  *     MotionGlobalConfig.skipAnimations = true;
  *   }
  *
- *   Or via env variable in playwright.config.ts webServer:
- *     env: { NEXT_PUBLIC_E2E: 'true' }
- *   And in your app: if (process.env.NEXT_PUBLIC_E2E === 'true') { ... }
+ * ⚠️ IntersectionObserver mock trade-off:
+ *   The mock makes all elements immediately "in-viewport" on first observe().
+ *   This ensures lazy-loaded images appear in full-page screenshots.
+ *   However, it means viewport-dependent UI (infinite scroll, sticky headers that
+ *   hide when out of viewport, load-more triggers) will render in a state that
+ *   never exists in production. If your tests include such components, consider
+ *   removing the mock and using a scroll-based warm-up instead:
+ *
+ *     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+ *     await page.evaluate(() => window.scrollTo(0, 0));
  */
 
 /**
@@ -44,27 +50,35 @@ import { test as base, expect, type Page } from '@playwright/test';
  * Works for both full-page navigations and SPA route changes.
  */
 export async function waitForPageReady(page: Page): Promise<void> {
-  // 1. Wait for all custom fonts to finish loading
-  //    Note: page.evaluate() correctly awaits the Promise returned by document.fonts.ready
-  //    page.waitForFunction(() => document.fonts.ready) is WRONG — Promise is always truthy
+  // 1. Wait for all custom fonts to finish loading.
+  //    Note: page.evaluate() correctly awaits the Promise returned by document.fonts.ready.
+  //    page.waitForFunction(() => document.fonts.ready) is WRONG — Promise is always truthy.
   await page.evaluate(() => document.fonts.ready);
 
-  // 2. Wait for all images to complete loading
+  // 2. Wait for all images to fully load.
+  //    Uses img.decode() which is race-free: unlike img.onload, it does not
+  //    miss images that completed loading between the check and handler assignment.
   await page.evaluate(() =>
     Promise.all(
       [...document.images].map((img) =>
         img.complete
           ? Promise.resolve()
-          : new Promise<void>((resolve) => {
-              img.onload = img.onerror = () => resolve();
+          : img.decode().catch(() => {
+              /* ignore decode errors (broken images, CORS) */
             })
       )
     )
   );
 
-  // 3. Freeze GSAP timeline in final state (if GSAP is present on the page)
-  //    pause() stops animations in current state
-  //    globalTimeline must be paused AFTER page has loaded and GSAP is initialized
+  // 3. Freeze GSAP timeline in final state (if GSAP is present on the page).
+  //    Must run after page load — GSAP may be loaded via dynamic import.
+  //    The guard is best-effort: if GSAP loads after this point, animations stay live.
+  //    For guaranteed freeze, use CSS injection in addInitScript instead:
+  //      page.addInitScript(() => {
+  //        const s = document.createElement('style');
+  //        s.textContent = '*, *::before, *::after { animation-duration: 0ms !important; transition-duration: 0ms !important; }';
+  //        document.head.appendChild(s);
+  //      })
   await page.evaluate(() => {
     const g = (window as any).gsap;
     if (g?.globalTimeline) {
@@ -72,7 +86,7 @@ export async function waitForPageReady(page: Page): Promise<void> {
     }
   });
 
-  // 4. Double rAF — let the browser settle one final paint frame
+  // 4. Double rAF — let the browser settle one final paint frame.
   await page.evaluate(
     () =>
       new Promise<void>((resolve) =>
@@ -84,40 +98,18 @@ export async function waitForPageReady(page: Page): Promise<void> {
 export const test = base.extend({
   page: async ({ page }, use) => {
     // ── Phase 1: addInitScript — runs BEFORE any page JavaScript ──────────────
-    // These must be registered before page.goto() is called.
-    // They automatically re-apply on every navigation (including SPA pushState).
-
-    // Mock IntersectionObserver so lazy loaders fire immediately.
-    // Must be in addInitScript — after page JS runs, components already have
-    // references to the original IntersectionObserver class.
+    // These scripts run before page.goto() and re-apply on every navigation
+    // (including SPA pushState). Register all init scripts in a single call
+    // to minimize round-trips to the browser process.
     await page.addInitScript(() => {
-      // Override getBoundingClientRect globally.
-      // addInitScript runs before layout, so getBoundingClientRect() returns {width:0, height:0}
-      // on all elements. Lazy loaders that check element dimensions would see empty rects
-      // and refuse to load. This override returns a realistic stand-in before first layout.
-      // After layout completes, the real implementation is called and returns actual values.
-      const _origGBCR = Element.prototype.getBoundingClientRect;
-      Element.prototype.getBoundingClientRect = function () {
-        const rect = _origGBCR.call(this);
-        if (rect.width === 0 && rect.height === 0) {
-          return {
-            x: 0,
-            y: 0,
-            top: 0,
-            left: 0,
-            bottom: 200,
-            right: 400,
-            width: 400,
-            height: 200,
-            toJSON() {
-              return this;
-            },
-          } as DOMRect;
-        }
-        return rect;
-      };
+      // Set window.__PLAYWRIGHT__ flag for app-level animation disabling.
+      // Framer Motion, custom animation libs, etc. can check this flag.
+      (window as any).__PLAYWRIGHT__ = true;
 
-      // Full IntersectionObserverEntry mock (all required fields per W3C spec).
+      // Mock IntersectionObserver so lazy loaders fire immediately.
+      // Must be in addInitScript — after page JS runs, components already hold
+      // references to the original IntersectionObserver class.
+      //
       // setTimeout(0): fires after framework finishes registering observers.
       // Direct (synchronous) callback invocation breaks frameworks that check
       // state in the constructor before observe() is called.
@@ -135,9 +127,8 @@ export const test = base.extend({
         }
 
         observe(target: Element): void {
-          // setTimeout(0): defer until after framework registers all observers.
           setTimeout(() => {
-            const rect = target.getBoundingClientRect(); // uses override above — realistic values
+            const rect = target.getBoundingClientRect();
             this._callback(
               [
                 {
@@ -146,8 +137,6 @@ export const test = base.extend({
                   target,
                   boundingClientRect: rect,
                   intersectionRect: rect,
-                  // Use viewport dimensions (not null) to satisfy loaders that check
-                  // whether the element is within the viewport bounds.
                   rootBounds: {
                     x: 0,
                     y: 0,
@@ -158,7 +147,16 @@ export const test = base.extend({
                     bottom: window.innerHeight,
                     right: window.innerWidth,
                     toJSON() {
-                      return this;
+                      return {
+                        x: 0,
+                        y: 0,
+                        top: 0,
+                        left: 0,
+                        width: window.innerWidth,
+                        height: window.innerHeight,
+                        bottom: window.innerHeight,
+                        right: window.innerWidth,
+                      };
                     },
                   } as DOMRectReadOnly,
                   time: performance.now(),
@@ -177,15 +175,8 @@ export const test = base.extend({
       };
     });
 
-    // Set window.__PLAYWRIGHT__ flag for app-level animation disabling.
-    // In your app, check this flag to disable Framer Motion / other frameworks.
-    // See usage comment at top of this file.
-    await page.addInitScript(() => {
-      (window as any).__PLAYWRIGHT__ = true;
-    });
-
     // ── Phase 2: page is available to tests ───────────────────────────────────
-    // Tests call waitForPageReady(page) explicitly after goto() and content wait.
+    // Call waitForPageReady(page) explicitly after page.goto() and locator.waitFor().
     await use(page);
   },
 });

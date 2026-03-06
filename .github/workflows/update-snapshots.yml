@@ -28,7 +28,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # Fetch full history so git push works correctly inside container
+          # actions/checkout with token sets up the git credential helper automatically.
+          # No need to manually configure git remote or credential.helper — it's handled.
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cache node_modules
@@ -51,16 +52,9 @@ jobs:
           CI: true
 
       - name: Commit updated snapshots
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          # Use credential helper to authenticate git push inside Docker container.
-          # This avoids exposing the token in `git remote -v` or .git/config.
-          git config --global credential.helper \
-            '!f() { echo "username=x-access-token"; echo "password=$GITHUB_TOKEN"; }; f'
 
           git add snapshots/
 
@@ -73,5 +67,12 @@ jobs:
           Reason: ${{ github.event.inputs.reason }}
           Triggered by: @${{ github.actor }}
           Workflow run: ${{ github.run_id }}"
-            git push
+
+            # Push to the branch that triggered this workflow.
+            # Never push to a detached HEAD or tag — fail explicitly if so.
+            if [ -z "${{ github.ref_name }}" ]; then
+              echo "Error: could not determine branch name. Was this triggered from a tag or detached HEAD?"
+              exit 1
+            fi
+            git push origin HEAD:${{ github.ref_name }}
           fi

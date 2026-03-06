@@ -8,8 +8,9 @@ export default defineConfig({
 
   // Run tests in parallel within each file
   fullyParallel: true,
-  // Limit workers in CI to avoid resource contention; locally use all CPUs
-  workers: process.env.CI ? 4 : undefined,
+  // GitHub Actions ubuntu-latest has 2 vCPUs — 4 workers causes CPU contention
+  // and increases screenshot timing variability. Use 2 in CI for determinism.
+  workers: process.env.CI ? 2 : undefined,
 
   // Retries: 0 locally (fail fast), 2 in CI (absorb single-frame flakiness)
   retries: process.env.CI ? 2 : 0,
@@ -17,27 +18,25 @@ export default defineConfig({
   // Stop after 10 failures in CI — don't run all 150 tests if something is globally broken
   maxFailures: process.env.CI ? 10 : 0,
 
-  // 'missing' — only create snapshots that don't exist yet, never overwrite existing ones.
-  // Use --update-snapshots (no flag) to overwrite changed ones intentionally.
-  // Requires @playwright/test >= 1.50
-  updateSnapshots: 'missing',
+  // Locally: 'missing' — create baselines that don't exist yet, never overwrite existing ones.
+  // In CI:   'none'    — NEVER auto-create or overwrite baselines. Missing baseline = test fails.
+  //                      Baselines must be committed to git before CI runs.
+  // Use --update-snapshots (no flag) or the update-snapshots.yml workflow for intentional updates.
+  updateSnapshots: process.env.CI ? 'none' : 'missing',
 
-  // Reporter: CI → dot + HTML report (never auto-opens browser)
-  //           Local → list (verbose) + HTML report (opens on failure)
+  // Reporter: CI → dot + HTML report (open:'never' — no browser in CI)
+  //           Local → list (verbose) + HTML report (opens on failure for quick inspection)
   reporter: process.env.CI
     ? [['dot'], ['html', { open: 'never', outputFolder: 'playwright-report' }]]
     : [['list'], ['html', { open: 'on-failure', outputFolder: 'playwright-report' }]],
 
   use: {
-    baseURL: 'https://your-site.com',
+    // ⚠️ Set this to your actual dev server URL, or use an env variable:
+    //   baseURL: process.env.BASE_URL || 'http://localhost:3000',
+    baseURL: process.env.BASE_URL || 'http://localhost:3000',
+
     // Emulate prefers-reduced-motion so CSS respects the media query
     reducedMotion: 'reduce',
-    // --disable-dev-shm-usage: fallback for Docker environments without --ipc=host.
-    // Prevents Chromium from crashing due to /dev/shm size limits (default 64MB in Docker).
-    // If using GitHub Actions with `container: options: --ipc=host`, remove this flag.
-    launchOptions: {
-      args: ['--disable-dev-shm-usage'],
-    },
   },
 
   expect: {
@@ -46,15 +45,12 @@ export default defineConfig({
       // This is already the default — listed here explicitly for visibility
       animations: 'disabled',
       maxDiffPixelRatio: 0.01, // allow up to 1% of pixels to differ
-      threshold: 0.2,          // per-pixel color sensitivity (0–1)
+      // threshold: per-pixel color sensitivity (0–1).
+      // 0.2 (Playwright default) is too permissive: allows 20% color shift per pixel.
+      // Use 0.1 for serious regression detection; raise to 0.2 only for font anti-aliasing issues.
+      threshold: 0.1,
     },
   },
-
-  // Locally: missing baselines → tests pass (no snapshot = skip, not fail)
-  // In CI:   missing baselines → tests fail (must be committed to git)
-  // ⚠️ Risk: locally you won't notice if you forgot to commit new baselines.
-  //    Mitigation: always run `git status snapshots/` before pushing.
-  ignoreSnapshots: !process.env.CI,
 
   projects: [
     {
@@ -67,23 +63,19 @@ export default defineConfig({
     {
       name: 'Tablet',
       use: {
-        // Don't spread a device preset — it would override the viewport below
+        // Include a device descriptor for correct user agent and touch emulation.
+        // Override viewport explicitly to the exact dimensions you want to test.
+        ...devices['iPad (gen 7)'],
         viewport: { width: 768, height: 1024 },
-        deviceScaleFactor: 2,
-        hasTouch: true,
-        isMobile: true,
       },
     },
     {
       name: 'Mobile',
       use: {
-        // Don't spread devices['iPhone 13'] and override viewport —
-        // that creates UA/viewport mismatch (UA says 390px, actual is 375px).
-        // Specify all required props explicitly.
+        // Include a device descriptor for correct mobile user agent.
+        // Override viewport explicitly to avoid UA/viewport mismatch.
+        ...devices['iPhone 13'],
         viewport: { width: 375, height: 812 },
-        deviceScaleFactor: 2,
-        hasTouch: true,
-        isMobile: true,
       },
     },
   ],
