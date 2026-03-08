@@ -11,9 +11,9 @@
 > ### Looking for a manual design audit?
 >
 > This skill does **automated screenshot comparison** (before/after code changes).
-> If you need to **manually audit a live site against a brandbook / design system** — checking colors, typography, spacing, component consistency — use **[pixel-perfect-audit](https://github.com/maxrihter/pixel-perfect-audit)** instead.
+> If you need to **manually audit a live site against a brandbook / design system** — checking colors, typography, spacing, component consistency — use **[claude-pixel-perfect-agent](https://github.com/maxrihter/claude-pixel-perfect-agent)** instead.
 >
-> | | This skill (visual regression) | [pixel-perfect-audit](https://github.com/maxrihter/pixel-perfect-audit) |
+> | | This skill (visual regression) | [claude-pixel-perfect-agent](https://github.com/maxrihter/claude-pixel-perfect-agent) |
 > |---|---|---|
 > | **Purpose** | Catch unintended visual changes after code updates | Verify implementation matches design specs |
 > | **How** | Automated Playwright screenshot diffing | Manual CSS inspection via Chrome MCP |
@@ -169,7 +169,7 @@ docker run --rm -v $(pwd):/work -w /work \
 ## Installation into Claude Code
 
 ```bash
-git clone https://github.com/maxrihter/claude-skill-pixel-perfect \
+git clone https://github.com/maxrihter/claude-skill-visual-regression \
   ~/.claude/skills/pixel-perfect
 ```
 
