@@ -1,10 +1,25 @@
-# 🎯 pixel-perfect
+# 🎯 pixel-perfect (Visual Regression)
 
-> A Claude Code skill for pixel-perfect visual regression testing using Playwright's built-in screenshot comparison engine.
+> A Claude Code skill for **automated visual regression testing** using Playwright's built-in screenshot comparison engine.
 
 ![Claude Skill](https://img.shields.io/badge/Claude-Skill-6B48FF?logo=anthropic&logoColor=white)
 ![Playwright](https://img.shields.io/badge/Playwright-45ba4b?logo=playwright&logoColor=white)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
+
+---
+
+> ### Looking for a manual design audit?
+>
+> This skill does **automated screenshot comparison** (before/after code changes).
+> If you need to **manually audit a live site against a brandbook / design system** — checking colors, typography, spacing, component consistency — use **[pixel-perfect-audit](https://github.com/maxrihter/pixel-perfect-audit)** instead.
+>
+> | | This skill (visual regression) | [pixel-perfect-audit](https://github.com/maxrihter/pixel-perfect-audit) |
+> |---|---|---|
+> | **Purpose** | Catch unintended visual changes after code updates | Verify implementation matches design specs |
+> | **How** | Automated Playwright screenshot diffing | Manual CSS inspection via Chrome MCP |
+> | **Input** | Baseline screenshots | Design system / brandbook |
+> | **Output** | HTML diff report (pass/fail) | Structured bug report (Excel/Markdown) |
+> | **When** | CI/CD pipeline, PR checks | Pre-launch design QA, redesign verification |
 
 ---
 
